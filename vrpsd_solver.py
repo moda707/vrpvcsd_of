@@ -1,0 +1,834 @@
+import json
+import math
+import os
+import random
+import numpy as np
+import tensorflow as tf
+
+import instance_generator
+import simulated_annealing
+import vrp
+import Utils
+import rl
+
+
+class Learner:
+    def __init__(self, env, instances, test_instance, rl_config, gen_config, sess, transfer_learning=False,
+                 obj="MAX"):
+        self.instances = instances
+        self.env = env
+        self.env.initialize_environment(instances[0])
+        self.test_instance = test_instance
+        self.max_trials = gen_config.trials
+        self.gen_config = gen_config
+        self.trials = gen_config.start_train_trial
+        rl_config.max_trials = self.max_trials
+
+        self.transfer_learning = transfer_learning
+
+        if obj == "MAX":
+            self.model = rl.QLearningMax(env, rl_config, sess, transfer_learning=transfer_learning, feat_size_c=6,
+                                         feat_size_v=6)
+        else:
+            self.model = rl.QLearningMin(env, rl_config, sess, transfer_learning=transfer_learning, feat_size_c=7,
+                                         feat_size_v=7)
+        self.code = self.gen_config.code
+
+        if transfer_learning:
+            self.load_source_network()
+            code = self.gen_config.code
+            tmp_config = self.test_instance["Config"]
+            if self.env.model_type == "VRPSCD":
+                new_code = f"tl_{code.split('_')[-1]}_{tmp_config.density_class}_{tmp_config.capacity}_" \
+                           f"{random.randint(10000, 99999)}"
+
+            else:
+                new_code = f"tl_{code.split('_')[-1]}_{tmp_config.n}_{int(tmp_config.duration_limit)}_" \
+                           f"{tmp_config.stoch_type}_{random.randint(10000, 99999)}"
+            self.code = new_code
+            # make directory
+            os.makedirs(self.gen_config.base_address + new_code)
+            print("new code:", new_code)
+
+    def train(self):
+        rl_config = self.model.rl_config
+        # update_prob = 5. / rl_config.batch_size
+        update_prob = rl_config.update_prob
+        # update_instances_every = 50000
+
+        fr_list = []
+        learning_loss = [0]
+        n_period_result = 1000
+
+        counter = 0
+        self.model.stop = False
+        update_counter = 0
+        n_step_q = self.model.rl_config.q_steps
+        gradient_record = []
+
+        lr_decay_params = rl_config.lr_decay
+        if self.transfer_learning:
+            lr_decay_params[2] /= 2.
+        lr_decay = Utils.LinearSchedule(init_t=self.gen_config.trials // 10,
+                                        end_t=2 * self.gen_config.trials // 3,
+                                        init_val=lr_decay_params[2], end_val=lr_decay_params[3],
+                                        update_every_t=lr_decay_params[4])
+        new_lr = lr_decay.init_val
+        hp_decay = Utils.LinearSchedule(init_t=self.gen_config.trials // 5, end_t=2 * self.gen_config.trials // 3,
+                                        init_val=1., end_val=.25, update_every_t=30000)
+
+        self.model.dqn.set_opt_param(new_lr=new_lr, new_hp=hp_decay.init_val, sess=self.model.sess)
+
+        prev_avg_rewards = 0
+
+        if self.model.env.model_type == "VRPSD":
+            # Be careful! This is only for VRPSD. test demand scenarios
+            with open(f"Instances/VRPSD/realizations/realization_r101_1_100_"
+                      f"{self.instances[0]['Config'].stoch_type}_500", 'r') as f:
+                test_scenarios = json.load(f)
+            test_scenarios = test_scenarios.values()
+            test_scenarios = np.asarray([list(t.values()) for t in test_scenarios]) / Utils.Norms.Q
+        else:
+            test_scenarios = None
+
+        # save the default models
+        self.model.save_network(self.gen_config.base_address + self.code, self.code)
+        self.model.save_network(self.gen_config.base_address + self.code + "/final", self.code)
+
+        experience_buffer = []
+        reset_distance_table = self.model.env.model_type == "VRPSCD"
+        time_tracker = Utils.TimeTracker()
+        while not self.model.stop:
+            # update the pool of instances
+            if self.env.model_type == "VRPSCD":
+                if self.trials % 20000 == 0:
+                    # generate 50 new instances and replace them in instances
+                    new_instances = instance_generator.generate_vrpscd_instances_generalized(
+                        instance_config=self.env.ins_config,
+                        density_class_list=[self.env.ins_config.density_class],
+                        capacity_list=[self.env.ins_config.capacity],
+                        count=50)
+
+                    # remove old ones
+                    old_codes = [m["Name"] for m in self.instances[:50]]
+                    del self.instances[:50]
+                    self.instances.extend(new_instances)
+                    for o in old_codes:
+                        self.env.all_distance_tables.pop(o, None)
+
+            if len(self.instances) == 1:
+                instance = None
+            else:
+                ins_id = math.floor(random.random() * len(self.instances))
+                instance = self.instances[ins_id]
+
+            self.model.env.reset(instance=instance, reset_distance=reset_distance_table, scenario=None)
+
+            # time scheduler
+            for j in range(self.env.ins_config.m):
+                self.model.env.TT.append((j, 0))
+
+            self.model.env.final_reward = 0
+
+            decision_epoch_counter = 0
+            prev_time = 0
+
+            # consider using heapq instead of sorting the TT
+            while len(self.model.env.TT) > 0:
+                self.model.env.TT.sort(key=lambda x: x[1])
+                k, stime = self.model.env.TT.pop(0)
+                self.model.env.time = stime
+
+                served_demand = self.model.env.state_transition(k, time_diff=stime - prev_time)
+                prev_time = stime
+
+                # select action
+                obs_k, x_k, preemptive, is_terminal, selected_index = self.model.choose_action(k, self.trials,
+                                                                                               train=True)
+                reward_to_learn = self.model.compute_actual_reward(k, x_k, preemptive)
+
+                self.model.env.actions[k].append(x_k)
+
+                if len(experience_buffer) > rl_config.q_steps - 1:
+                    tmpr = sum([r[2] * (rl_config.gama ** ii) for ii, r in enumerate(experience_buffer)])
+                    tmp_exp = experience_buffer.pop(0)
+                    tmp_exp[2] = tmpr
+                    tmp_exp.append(obs_k)
+                    self.model.memory.add_sample(tmp_exp)
+                experience_buffer.append([obs_k, selected_index, reward_to_learn, is_terminal])
+
+                t_k = self.model.env.post_decision(x_k, k, preemptive)
+
+                # schedule the next event for vehicle k if it still has time
+                k_still_continue = t_k < self.env.ins_config.duration_limit and is_terminal == 0
+
+                if k_still_continue:
+                    self.model.env.TT.append((k, t_k))
+
+                self.model.env.final_reward += served_demand
+                decision_epoch_counter += 1
+
+                if random.random() < update_prob and self.model.memory.get_size() > 1000:
+                    loss, gradient = self.model.learn(self.trials)
+
+                    learning_loss.append(loss)
+                    gradient_record.append(gradient)
+                    update_counter += 1
+
+                    if len(learning_loss) > 500:
+                        learning_loss.pop(0)
+                        gradient_record.pop(0)
+
+            self.model.DecisionEpochs += decision_epoch_counter
+
+            # end of trial
+            self.model.env.time = self.env.ins_config.duration_limit
+            experience_buffer.append([obs_k, 0, 0, 1])
+
+            while len(experience_buffer) > 1:
+                tmpr = sum([r[2] for r in experience_buffer])
+                tmp_exp = experience_buffer.pop(0)
+                tmp_exp[2] = tmpr
+                tmp_exp.append(obs_k)
+                if tmp_exp[0] is not None and obs_k is not None:
+                    self.model.memory.add_sample(tmp_exp)
+
+            fr_list.append(self.model.env.final_reward * Utils.Norms.Q)
+
+            self.model.TrainTime += time_tracker.timeit()
+
+            # update learning rate
+            if lr_decay.update_time(self.trials):
+                new_lr = lr_decay.val(self.trials)
+                self.model.dqn.set_opt_param(new_lr=new_lr, sess=self.model.sess)
+
+            # update huber parameter
+            if hp_decay.update_time(self.trials):
+                new_hp = hp_decay.val(self.trials)
+                self.model.dqn.set_opt_param(new_hp=new_hp, sess=self.model.sess)
+
+            self.trials += 1
+
+            if self.trials % n_period_result == 0:
+                # avg_final_reward = np.mean(fr_list) * self.env.ins_config.capacity
+                avg_final_reward = np.mean(fr_list)
+                print(f"{self.trials}\t{update_counter}\t{avg_final_reward:.2f}\t{self.model.TrainTime:.1f}\t"
+                      f"{np.mean(learning_loss):.6f}\t{np.mean(gradient_record):.6f}\t{self.model.zero_q}")
+                fr_list = []
+                self.model.zero_q = 0
+
+            if self.trials % self.model.rl_config.test_every == 0:
+            # if self.trials % self.model.rl_config.test_every == 50:
+                if test_scenarios is None:
+                    if self.model.env_config.model_type == "VRPSCD":
+                        # generate test scenarios
+                        test_scenarios = [[self.model.env.generate_dem_real_gendreau(c[-1])
+                                          for c in self.test_instance["Customers"]]
+                                          for _ in range(500)]
+                    else:
+                        test_scenarios = []
+                        print("test scenarios for VRPSD are not provided.")
+
+                c_res = Utils.TestResults()
+
+                for test_scenario in test_scenarios:
+                    res = self.model.test_model(self.test_instance, test_scenario)
+                    c_res.accumulate_results(res)
+                c_res.print_avgs_full()
+                avg_final_reward = c_res.get_avg_final_reward()
+                if avg_final_reward > prev_avg_rewards:
+                    prev_avg_rewards = avg_final_reward
+                    self.model.save_network(self.gen_config.base_address + self.gen_config.code, self.gen_config.code,
+                                            False)
+                self.model.zero_q = 0
+
+            # save the model every
+            if self.trials % 1000 == 0:
+                if self.model.tl:
+                    saving_code = self.code
+                else:
+                    saving_code = self.gen_config.code + "/final"
+
+                self.model.save_network(self.gen_config.base_address + saving_code,
+                                        saving_code, False)
+
+            counter += 1
+            # stoppage criteria
+            if self.trials > self.max_trials:
+                self.model.stop = True
+
+        return None
+
+    def train_min(self):
+        rl_config = self.model.rl_config
+        # update_prob = 5. / rl_config.batch_size
+        update_prob = rl_config.update_prob
+        # update_instances_every = 50000
+
+        fr_list = []
+        learning_loss = [0]
+        n_period_result = 1000
+
+        counter = 0
+        self.model.stop = False
+        update_counter = 0
+        n_step_q = self.model.rl_config.q_steps
+        gradient_record = []
+
+        lr_decay_params = rl_config.lr_decay
+        if self.transfer_learning:
+            lr_decay_params[2] /= 2.
+        lr_decay = Utils.LinearSchedule(init_t=self.gen_config.trials // 10,
+                                        end_t=2 * self.gen_config.trials // 3,
+                                        init_val=lr_decay_params[2], end_val=lr_decay_params[3],
+                                        update_every_t=lr_decay_params[4])
+        new_lr = lr_decay.init_val
+        hp_decay = Utils.LinearSchedule(init_t=self.gen_config.trials // 5, end_t=2 * self.gen_config.trials // 3,
+                                        init_val=1., end_val=.25, update_every_t=30000)
+
+        self.model.dqn.set_opt_param(new_lr=new_lr, new_hp=hp_decay.init_val, sess=self.model.sess)
+
+        prev_avg_rewards = 0
+
+        # if self.model.env.model_type == "VRPSD":
+        #     # Be careful! This is only for VRPSD. test demand scenarios
+        #     with open(f"Instances/VRPSD/realizations/realization_r101_1_100_"
+        #               f"{self.instances[0]['Config'].stoch_type}_500", 'r') as f:
+        #         test_scenarios = json.load(f)
+        #     test_scenarios = test_scenarios.values()
+        #     test_scenarios = np.asarray([list(t.values()) for t in test_scenarios]) / Utils.Norms.Q
+        # else:
+        test_scenarios = None
+
+        # save the default models
+        self.model.save_network(self.gen_config.base_address + self.code, self.code)
+        self.model.save_network(self.gen_config.base_address + self.code + "/final", self.code)
+
+        reset_distance_table = True
+        time_tracker = Utils.TimeTracker()
+        while not self.model.stop:
+            experience_buffer = []
+
+            # update the pool of instances
+            # if self.env.model_type == "VRPSCD":
+            if self.trials % 20000 == 0:
+                # generate 50 new instances and replace them in instances
+                new_instances = instance_generator.generate_vrpscd_instances_generalized(
+                    instance_config=self.env.ins_config,
+                    density_class_list=[self.env.ins_config.density_class],
+                    capacity_list=[self.env.ins_config.capacity],
+                    count=50)
+
+                # remove old ones
+                old_codes = [m["Name"] for m in self.instances[:50]]
+                del self.instances[:50]
+                self.instances.extend(new_instances)
+                for o in old_codes:
+                    self.env.all_distance_tables.pop(o, None)
+
+            # if len(self.instances) == 1:
+            #     instance = None
+            # else:
+            ins_id = math.floor(random.random() * len(self.instances))
+            instance = self.instances[ins_id]
+
+            self.model.env.reset(instance=instance, reset_distance=reset_distance_table, scenario=None)
+
+            # customer selection process
+            self.model.customer_set_selection()
+
+            # time scheduler
+            for j in range(self.env.ins_config.m):
+                self.model.env.TT.append((j, 0))
+
+            self.model.env.final_reward = 0
+
+            decision_epoch_counter = 0
+            prev_time = 0
+
+            # consider using heapq instead of sorting the TT
+            while len(self.model.env.TT) > 0:
+                self.model.env.TT.sort(key=lambda x: x[1])
+                k, stime = self.model.env.TT.pop(0)
+                self.model.env.time = stime
+
+                self.model.env.state_transition(k, time_diff=stime - prev_time)
+                prev_time = stime
+
+                # select action
+                obs_k, x_k, preemptive, is_terminal, selected_index = self.model.choose_action(k, self.trials,
+                                                                                               train=True)
+                reward_to_learn = self.model.compute_actual_reward(k, x_k, preemptive, is_terminal)
+
+                self.model.env.actions[k].append(x_k)
+
+                if len(experience_buffer) > rl_config.q_steps - 1:
+                    tmpr = sum([r[2] * (rl_config.gama ** ii) for ii, r in enumerate(experience_buffer)])
+                    tmp_exp = experience_buffer.pop(0)
+                    tmp_exp[2] = tmpr
+                    tmp_exp.append(obs_k)
+                    self.model.memory.add_sample(tmp_exp)
+                experience_buffer.append([obs_k, selected_index, reward_to_learn, 0])
+
+                t_k = self.model.env.post_decision(x_k, k, preemptive)
+
+                # schedule the next event for vehicle k if it is not terminated
+                if not is_terminal:
+                    self.model.env.TT.append((k, t_k))
+                else:
+                    # check if there is nothing is scheduled, set the last experience as the terminal
+                    if len(self.model.env.TT) == 0:
+                        experience_buffer[-1][-1] = 1
+
+                self.model.env.final_reward += reward_to_learn
+                decision_epoch_counter += 1
+
+                if random.random() < update_prob and self.model.memory.get_size() > 1000:
+                    loss, gradient = self.model.learn(self.trials)
+
+                    learning_loss.append(loss)
+                    gradient_record.append(gradient)
+                    update_counter += 1
+
+                    if len(learning_loss) > 500:
+                        learning_loss.pop(0)
+                        gradient_record.pop(0)
+
+            self.model.DecisionEpochs += decision_epoch_counter
+
+            # end of trial
+            # self.model.env.time = self.env.ins_config.duration_limit
+            # experience_buffer.append([obs_k, 0, 0, 1])
+
+            while len(experience_buffer) > 0:
+                tmpr = sum([r[2] for r in experience_buffer])
+                tmp_exp = experience_buffer.pop(0)
+                tmp_exp[2] = tmpr
+                tmp_exp.append(obs_k)
+                if tmp_exp[0] is not None and obs_k is not None:
+                    self.model.memory.add_sample(tmp_exp)
+
+            fr_list.append(self.model.env.final_reward)
+
+            self.model.TrainTime += time_tracker.timeit()
+
+            # update learning rate
+            if lr_decay.update_time(self.trials):
+                new_lr = lr_decay.val(self.trials)
+                self.model.dqn.set_opt_param(new_lr=new_lr, sess=self.model.sess)
+
+            # update huber parameter
+            if hp_decay.update_time(self.trials):
+                new_hp = hp_decay.val(self.trials)
+                self.model.dqn.set_opt_param(new_hp=new_hp, sess=self.model.sess)
+
+            self.trials += 1
+
+            if self.trials % n_period_result == 0:
+                # avg_final_reward = np.mean(fr_list) * self.env.ins_config.capacity
+                avg_final_reward = np.mean(fr_list)
+                print(f"{self.trials}\t{update_counter}\t{avg_final_reward:.2f}\t{self.model.TrainTime:.1f}\t"
+                      f"{np.mean(learning_loss):.6f}\t{np.mean(gradient_record):.6f}\t{self.model.zero_q}")
+                fr_list = []
+                self.model.zero_q = 0
+
+            if self.trials % self.model.rl_config.test_every == 0:
+            # if self.trials % self.model.rl_config.test_every == 50:
+                if test_scenarios is None:
+                    # if self.model.env_config.model_type == "VRPSCD":
+                    # generate test scenarios
+                    test_scenarios = [[self.model.env.generate_dem_real_gendreau(c[-1])
+                                      for c in self.test_instance["Customers"]]
+                                      for _ in range(500)]
+                    # else:
+                    #     test_scenarios = []
+                    #     print("test scenarios for VRPSD are not provided.")
+
+                c_res = Utils.TestResults()
+
+                for test_scenario in test_scenarios:
+                    res = self.model.test_model(self.test_instance, test_scenario)
+                    c_res.accumulate_results(res)
+                c_res.print_avgs_full()
+                avg_final_reward = c_res.get_avg_final_reward()
+                if avg_final_reward > prev_avg_rewards:
+                    prev_avg_rewards = avg_final_reward
+                    self.model.save_network(self.gen_config.base_address + self.gen_config.code, self.gen_config.code,
+                                            False)
+                self.model.zero_q = 0
+
+            # save the model every
+            if self.trials % 1000 == 0:
+                if self.model.tl:
+                    saving_code = self.code
+                else:
+                    saving_code = self.gen_config.code + "/final"
+
+                self.model.save_network(self.gen_config.base_address + saving_code,
+                                        saving_code, False)
+
+            counter += 1
+            # stoppage criteria
+            if self.trials > self.max_trials:
+                self.model.stop = True
+
+        return None
+
+    def train_centralized(self):
+        rl_config = self.model.rl_config
+        # update_prob = 5. / rl_config.batch_size
+        update_prob = rl_config.update_prob
+        # update_instances_every = 50000
+
+        fr_list = []
+        learning_loss = [0]
+        n_period_result = 1000
+
+        counter = 0
+        self.model.stop = False
+        update_counter = 0
+        gradient_record = []
+
+        lr_decay_params = rl_config.lr_decay
+        if self.transfer_learning:
+            lr_decay_params[2] /= 2.
+        lr_decay = Utils.LinearSchedule(init_t=self.gen_config.trials // 10,
+                                        end_t=2 * self.gen_config.trials // 3,
+                                        init_val=lr_decay_params[2], end_val=lr_decay_params[3],
+                                        update_every_t=lr_decay_params[4])
+        new_lr = lr_decay.init_val
+        hp_decay = Utils.LinearSchedule(init_t=self.gen_config.trials // 5, end_t=2 * self.gen_config.trials // 3,
+                                        init_val=1., end_val=.25, update_every_t=30000)
+
+        self.model.dqn.set_opt_param(new_lr=new_lr, new_hp=hp_decay.init_val, sess=self.model.sess)
+
+        prev_avg_rewards = 0
+
+        if self.model.env.model_type == "VRPSD":
+            # Be careful! This is only for VRPSD. test demand scenarios
+            with open(f"Instances/VRPSD/realizations/realization_r101_1_100_"
+                      f"{self.instances[0]['Config'].stoch_type}_500", 'r') as f:
+                test_scenarios = json.load(f)
+            test_scenarios = test_scenarios.values()
+            test_scenarios = np.asarray([list(t.values()) for t in test_scenarios]) / Utils.Norms.Q
+        else:
+            test_scenarios = None
+
+        # save the default models
+        self.model.save_network(self.gen_config.base_address + self.code, self.code)
+        self.model.save_network(self.gen_config.base_address + self.code + "/final", self.code)
+
+        experience_buffer = []
+        reset_distance_table = self.model.env.model_type == "VRPSCD"
+        time_tracker = Utils.TimeTracker()
+        while not self.model.stop:
+            # update the pool of instances
+            if self.env.model_type == "VRPSCD":
+                if self.trials % 20000 == 0:
+                    # generate 50 new instances and replace them in instances
+                    new_instances = instance_generator.generate_vrpscd_instances_generalized(
+                        instance_config=self.env.ins_config,
+                        density_class_list=[self.env.ins_config.density_class],
+                        capacity_list=[self.env.ins_config.capacity],
+                        count=50)
+
+                    # remove old ones
+                    old_codes = [m["Name"] for m in self.instances[:50]]
+                    del self.instances[:50]
+                    self.instances.extend(new_instances)
+                    for o in old_codes:
+                        self.env.all_distance_tables.pop(o, None)
+
+            if len(self.instances) == 1:
+                instance = None
+            else:
+                ins_id = math.floor(random.random() * len(self.instances))
+                instance = self.instances[ins_id]
+
+            self.model.env.reset(instance=instance, reset_distance=reset_distance_table, scenario=None)
+
+            # time scheduler
+            for j in range(self.env.ins_config.m):
+                self.model.env.TT.append((j, 0))
+
+            self.model.env.final_reward = 0
+
+            decision_epoch_counter = 0
+            prev_time = 0
+
+            # consider using heapq instead of sorting the TT
+            while len(self.model.env.TT) > 0:
+                self.model.env.TT.sort(key=lambda x: x[1])
+                k, stime = self.model.env.TT.pop(0)
+                self.model.env.time = stime
+
+                served_demand = self.model.env.state_transition(k, time_diff=stime - prev_time)
+                prev_time = stime
+
+                # select action
+                x_k, state, available_targets, is_terminal = self.model.choose_action_centralized(k, self.trials, True)
+
+                reward_to_learn = self.model.compute_actual_reward(k, x_k, False)
+
+                self.model.env.actions[k].append(x_k)
+
+                if len(experience_buffer) > rl_config.q_steps - 1:
+                    tmpr = sum([r[3] * (rl_config.gama ** ii) for ii, r in enumerate(experience_buffer)])
+                    tmp_exp = experience_buffer.pop(0)
+                    tmp_exp[3] = tmpr
+                    tmp_exp.append(state)
+                    tmp_exp.append(available_targets)
+                    self.model.memory.add_sample(tmp_exp)
+                # state, available_targets, action, reward, is_terminal, next_state, next_available_targets
+                experience_buffer.append([state, available_targets, x_k, reward_to_learn, is_terminal])
+
+                t_k = self.model.env.post_decision(x_k, k, False)
+
+                # schedule the next event for vehicle k if it still has time
+                k_still_continue = t_k < self.env.ins_config.duration_limit and is_terminal == 0
+
+                if k_still_continue:
+                    self.model.env.TT.append((k, t_k))
+
+                self.model.env.final_reward += served_demand
+                decision_epoch_counter += 1
+
+                if random.random() < update_prob and self.model.memory.get_size() > 1000:
+                    # loss, gradient = self.model.learn(self.trials)
+                    loss, gradient = self.model.learn_centralized(self.trials)
+
+                    learning_loss.append(loss)
+                    gradient_record.append(gradient)
+                    update_counter += 1
+
+                    if len(learning_loss) > 500:
+                        learning_loss.pop(0)
+                        gradient_record.pop(0)
+
+            self.model.DecisionEpochs += decision_epoch_counter
+
+            # end of trial
+            self.model.env.time = self.env.ins_config.duration_limit
+            experience_buffer.append([state, available_targets, x_k, 0, 1])
+
+            while len(experience_buffer) > 1:
+                tmpr = sum([r[3] for r in experience_buffer])
+                tmp_exp = experience_buffer.pop(0)
+                tmp_exp[3] = tmpr
+                tmp_exp.append(state)
+                tmp_exp.append(available_targets)
+                if tmp_exp[0] is not None and state is not None:
+                    self.model.memory.add_sample(tmp_exp)
+
+            fr_list.append(self.model.env.final_reward * Utils.Norms.Q)
+
+            self.model.TrainTime += time_tracker.timeit()
+
+            # update learning rate
+            if lr_decay.update_time(self.trials):
+                new_lr = lr_decay.val(self.trials)
+                self.model.dqn.set_opt_param(new_lr=new_lr, sess=self.model.sess)
+
+            # update huber parameter
+            if hp_decay.update_time(self.trials):
+                new_hp = hp_decay.val(self.trials)
+                self.model.dqn.set_opt_param(new_hp=new_hp, sess=self.model.sess)
+
+            self.trials += 1
+
+            if self.trials % n_period_result == 0:
+                # avg_final_reward = np.mean(fr_list) * self.env.ins_config.capacity
+                avg_final_reward = np.mean(fr_list)
+                print(f"{self.trials}\t{update_counter}\t{avg_final_reward:.2f}\t{self.model.TrainTime:.1f}\t"
+                      f"{np.mean(learning_loss):.6f}\t{np.mean(gradient_record):.6f}\t{self.model.zero_q}")
+                fr_list = []
+                self.model.zero_q = 0
+
+            if self.trials % self.model.rl_config.test_every == 0:
+            # if self.trials % self.model.rl_config.test_every == 50:
+                if test_scenarios is None:
+                    if self.model.env_config.model_type == "VRPSCD":
+                        # generate test scenarios
+                        test_scenarios = [[self.model.env.generate_dem_real_gendreau(c[-1])
+                                          for c in self.test_instance["Customers"]]
+                                          for _ in range(500)]
+                    else:
+                        test_scenarios = []
+                        print("test scenarios for VRPSD are not provided.")
+
+                c_res = Utils.TestResults()
+
+                for test_scenario in test_scenarios:
+                    res = self.model.test_model_centralized(self.test_instance, test_scenario)
+                    c_res.accumulate_results(res)
+                c_res.print_avgs_full()
+                avg_final_reward = c_res.get_avg_final_reward()
+                if avg_final_reward > prev_avg_rewards:
+                    prev_avg_rewards = avg_final_reward
+                    self.model.save_network(self.gen_config.base_address + self.gen_config.code, self.gen_config.code,
+                                            False)
+                self.model.zero_q = 0
+
+            # save the model every
+            if self.trials % 1000 == 0:
+                if self.model.tl:
+                    saving_code = self.code
+                else:
+                    saving_code = self.gen_config.code + "/final"
+
+                self.model.save_network(self.gen_config.base_address + saving_code,
+                                        saving_code, False)
+
+            counter += 1
+            # stoppage criteria
+            if self.trials > self.max_trials:
+                self.model.stop = True
+
+        return None
+
+
+    def load_source_network(self):
+        network_address = self.gen_config.base_address + self.gen_config.code + "/final"
+        self.model.load_network(network_address)
+
+    def save_model(self):
+        self.model.save_network(self.gen_config.base_address + self.gen_config.code + "/final",
+                                self.gen_config.code)
+
+    def load_model(self):
+        new_saver = tf.compat.v1.train.Saver()
+        # model_dir = f"{self.gen_config.base_address}{self.gen_config.code}"
+        # model_dir = f"{self.gen_config.base_address}{self.gen_config.code}/final"
+        model_dir = f"{self.gen_config.base_address}{self.gen_config.code}/final/{self.gen_config.code}"
+
+        new_saver.restore(self.model.sess, tf.train.latest_checkpoint(model_dir))
+
+    def test(self, instance, visualize=False):
+        c_res = Utils.TestResults()
+
+        # load scenarios
+        if self.env.model_type == "VRPSD":
+            with open(f"Instances/VRPSD/realizations/realization_r101_1_100_{instance['Config'].stoch_type}_500", 'r') as f:
+                scenarios = json.load(f)
+            scenarios = scenarios.values()
+            scenarios = np.asarray([list(t.values()) for t in scenarios]) / Utils.Norms.Q
+        else:
+            scenarios = None
+
+        if visualize:
+            if scenarios is None:
+                for _ in range(3):
+                    res = self.model.test_model(instance, None)
+                    Utils.plot_environment(c=self.model.env.customers,
+                                           v=res.actions,
+                                           depot=[.50, .50],
+                                           service_area_length=[1.00, 1.00],
+                                           detail_level=3,
+                                           animate=False)
+                    res.print_full()
+                    print(res.agent_record)
+                    res.print_actions()
+            else:
+                for scenario in scenarios[:3]:
+                    res = self.model.test_model(instance, scenario)
+                    Utils.plot_environment(c=self.model.env.customers,
+                                           v=res.actions,
+                                           depot=[.35, .35],
+                                           service_area_length=[0.8, 0.8],
+                                           detail_level=3,
+                                           animate=False)
+                    res.print_full()
+                    print(res.agent_record)
+                    res.print_actions()
+        else:
+            if scenarios is None:
+                for _ in range(500):
+                    res = self.model.test_model(instance, None)
+                    c_res.accumulate_results(res)
+            else:
+                for scenario in scenarios:
+                    res = self.model.test_model(instance, scenario)
+
+                    c_res.accumulate_results(res)
+            # c_res.print_avgs_full()
+            return c_res.get_avg_final_reward()
+
+    def test_min(self, instance, visualize=False):
+        c_res = Utils.TestResults()
+
+        if visualize:
+            for _ in range(3):
+                res = self.model.test_model(instance, None)
+                Utils.plot_environment(c=self.model.env.customers,
+                                       v=res.actions,
+                                       depot=[.50, .50],
+                                       service_area_length=[1.00, 1.00],
+                                       detail_level=3,
+                                       animate=False)
+                res.print_full()
+                print(res.agent_record)
+                res.print_actions()
+
+        else:
+            for _ in range(500):
+                res = self.model.test_model(instance, None)
+                c_res.accumulate_results(res)
+
+            # c_res.print_avgs_full()
+            return c_res.get_avg_final_reward()
+
+    def evaluate_solution(self, selected_customers):
+
+        obs, (target_customers_dir, target_customers_indir), is_terminal = self.model.observation_function(k)
+
+        return 0
+
+    def simulated_annearling_runner(self, instance):
+        self.env.reset(instance, scenario=None, reset_distance=True)
+
+        # initialize x_c, x_b
+        init_solution = simulated_annealing.greedy_solution(instance)
+        init_value = self.evaluate_solution(init_solution)
+
+        x_c = list(init_solution)
+        x_b = list(init_solution)
+
+        val_c = init_value + 0.
+        val_b = init_value + 0.
+
+        # set temperature
+        temp = 100
+        temp_min = 0.001
+        kappa = 10.
+        alpha = 0.95
+
+        # set iteration
+        itr = 0
+        itr_max = 100
+
+        # set neighbor count
+        neighbors_count = 100
+
+        while temp > temp_min:
+            while itr < itr_max:
+                x_neighbors = [simulated_annealing.generate_neighbor(x_c, customers)
+                               for _ in range(neighbors_count)]
+                x_neighbors_values = [self.evaluate_solution(x) for x in x_neighbors]
+                best_loc_id = np.argmin(x_neighbors_values)
+                best_loc_x = x_neighbors[best_loc_id]
+                best_loc_value = x_neighbors_values[best_loc_id]
+
+                if best_loc_value < val_b:
+                    x_c = list(best_loc_x)
+                    x_b = list(best_loc_x)
+
+                    val_c = best_loc_value + 0.
+                    val_b = best_loc_value + 0.
+                else:
+                    acceptance_prob = np.exp(-(best_loc_value - val_c) / (temp * kappa))
+                    if random.Random() < acceptance_prob:
+                        x_c = list(best_loc_x)
+                        val_c = best_loc_value + 0.
+                itr += 1
+            temp *= alpha
+        return x_b

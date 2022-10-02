@@ -1,3 +1,3 @@
-VRPVCSD proble
-We propose an observation function to replace the large state representation
-We implement a q-learning algo
+# VRPSCD with Observation function
+
+We propose a hand engineered obs function (Paper 1 of my PhD)
