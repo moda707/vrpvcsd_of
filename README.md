@@ -1,3 +1,3 @@
-# VRPSCD MARL
+# VRPSCD with Observation function
 
-Multi-agent Reinforcement Learning for Vehicle Routing Problem with Stochastic Customers and Demands
+We propose a hand engineered obs function (Paper 1 of my PhD)
