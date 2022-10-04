@@ -196,7 +196,7 @@ def generate_vrpscd_instances_generalized(instance_config, density_class_list, c
         jl = len(heatmap[0])
 
         # Generate a set of customers (location + expected demand)
-        c_set = np.zeros([max_c_size, 9])
+        c_set = np.zeros([max_c_size + 1, 9])
         realized_pos = [(50, 50)]
         c_count = 0
         n_cust_limit = min(nbar * 1.2, max_c_size)
@@ -237,8 +237,9 @@ def generate_vrpscd_instances_generalized(instance_config, density_class_list, c
                     if c_count >= n_cust_limit:
                         break
 
-        config.n = len(c_set)
+        config.n = len(c_set) - 1
         config.real_n = c_count
+        c_set[-1] = [config.n, 50 / Utils.Norms.COORD, 50 / Utils.Norms.COORD, 0, 0, 0, 0, 0, 0]
         inst_name = "I_" + str(density_class) + "_" + str(config.m) + "_" + str(config.capacity) + "_" + \
                     str(random.randint(100000, 999999))
         instance = {"Vehicles": np.array(v_set), "Customers": np.array(c_set).astype(float), "Config": config,

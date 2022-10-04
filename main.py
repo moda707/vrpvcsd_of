@@ -53,7 +53,7 @@ if __name__ == "__main__":
         print("Model type is not defined.")
 
     # Initialize the environment
-    vrpsd = vrp.VRPSD(env_config, rl_config.preempt_action)
+    vrpsd = vrp.VRPSD(env_config)
 
     if parser.operation == "train":
         caps = "".join([str(m) for m in instance_config.capacity])
@@ -77,62 +77,11 @@ if __name__ == "__main__":
             learner = vrpsd_solver.Learner(env=vrpsd, instances=instances, test_instance=instances[0],
                                            rl_config=rl_config, gen_config=gen_config, sess=sess)
             print("Trials\t#trains\treward\ttime\tloss")
-            # results = learner.train()
-            results = learner.train_centralized()
-            learner.save_model()
-        print("Done!")
-    elif parser.operation == "train_min":
-        vrpsd = vrp.DVRPSD(env_config)
-        caps = "".join([str(m) for m in instance_config.capacity])
-        # gen_config.code = f"{instance_config.density_class}_{caps}_" \
-        #                   f"{random.randint(1000, 9999)}"
-
-        print(f"Model code is {gen_config.code}")
-        print("Params:")
-        print("general config", gen_config)
-        print("instance config", instance_config)
-        print("rl config", rl_config)
-        print("env config", env_config)
-
-        with tf.Session() as sess:
-            learner = vrpsd_solver.Learner(env=vrpsd, instances=instances, test_instance=instances[0],
-                                           rl_config=rl_config, gen_config=gen_config, sess=sess, obj="MIN")
-            learner.load_model()
-            print("Trials\t#trains\treward\ttime\tloss")
-            results = learner.train_min()
+            results = learner.train()
+            # results = learner.train_centralized()
             learner.save_model()
         print("Done!")
 
-    elif parser.operation == "test_tl":
-        with tf.Session() as sess:
-            learner = vrpsd_solver.Learner(env=vrpsd, instances=instances, test_instance=instances[0],
-                                           rl_config=rl_config, gen_config=gen_config, sess=sess,
-                                           transfer_learning=True)
-            learner.load_model()
-            rr = 0
-            for e, instance in enumerate(instances[:100]):
-
-                # if scenarios_set is not None:
-                #     scenarios = np.array(scenarios_set[e]) / Utils.Norms.Q
-                #     # scenarios = scenarios[:5]
-                # else:
-                #     scenarios = None
-                # avg_rew = 0
-                # for scenario in scenarios:
-                #     res = vrp_sim.simulate(instance, scenario, method="random")
-                #     avg_rew += res.final_reward
-                # avg_rew /= len(scenarios)
-
-                avg_rew = learner.test(instance, visualize=False)
-                # print(avg_rew)
-                print(f"{e + 1}\t{instance['Config'].real_n}\t"
-                      # f"{instance['Config'].stoch_type}", 
-                      f"{avg_rew}")
-
-            # learner = vrpsd_solver.Learner(env=vrpsd, instances=instances, test_instance=instances[0],
-            #                                rl_config=rl_config, gen_config=gen_config, sess=sess)
-            # learner.load_model()
-            # learner.test(instances[0], visualize=False)
     elif parser.operation == "test":
         with tf.Session() as sess:
             learner = vrpsd_solver.Learner(env=vrpsd, instances=instances, test_instance=instances[0],
@@ -160,52 +109,6 @@ if __name__ == "__main__":
                           f"{avg_rew}")
                 else:
                     print(avg_rew)
-    elif parser.operation == "test_min":
-        with tf.Session() as sess:
-            vrpsd = vrp.DVRPSD(env_config)
-            learner = vrpsd_solver.Learner(env=vrpsd, instances=instances, test_instance=instances[0],
-                                           rl_config=rl_config, gen_config=gen_config, sess=sess, obj="MIN")
-            learner.load_model()
-            rr = 0
-            for e, instance in enumerate(instances[rr:rr + 1]):
-
-                # if scenarios_set is not None:
-                #     scenarios = np.array(scenarios_set[e]) / Utils.Norms.Q
-                #     # scenarios = scenarios[:5]
-                # else:
-                #     scenarios = None
-                # avg_rew = 0
-                # for scenario in scenarios:
-                #     res = vrp_sim.simulate(instance, scenario, method="random")
-                #     avg_rew += res.final_reward
-                # avg_rew /= len(scenarios)
-
-                avg_rew = learner.test_min(instance, visualize=True)
-                # print(avg_rew)
-                if parser.model_type == "VRPSCD":
-                    print(f"{e + 1}\t{instance['Config'].real_n}\t"
-                          # f"{instance['Config'].stoch_type}", 
-                          f"{avg_rew}")
-                else:
-                    print(avg_rew)
-
-    elif parser.operation == "train_tl":
-        print(f"Source Model code is {gen_config.code}")
-        print("Params:")
-        print("general config", gen_config)
-        print("instance config", instance_config)
-        print("rl config", rl_config)
-        print("env config", env_config)
-        with tf.Session() as sess:
-            tl_learner = vrpsd_solver.Learner(env=vrpsd, instances=instances, test_instance=instances[0],
-                                              rl_config=rl_config, gen_config=gen_config, sess=sess,
-                                              transfer_learning=True)
-
-            print("Trials\t#trains\treward\ttime\tloss")
-            results = tl_learner.train()
-            tl_learner.save_model()
-
-            print("Done!")
     else:
         print("Operation is not defined.")
 

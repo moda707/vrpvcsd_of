@@ -34,6 +34,8 @@ class Parser(object):
                             default="")
         parser.add_argument('--generalized', nargs="?", help="is generalized", type=int, metavar="generalized",
                             default=0)
+        parser.add_argument('--obs', nargs="?", help="use obs (1 or 0)", type=int, metavar="use_obs",
+                            default=1)
         parser.add_argument('--preempt_action', nargs="?", help="use the preemptive actions (1 or 0)?", type=int,
                             metavar="preempt_action", default=1)
 
@@ -59,6 +61,7 @@ class Parser(object):
         self.start_train_trial = args.start_train
         self.generalized = args.generalized
         self.preempt_action = args.preempt_action
+        self.use_obs = args.obs
 
         self.env_config = configp["Environment"]
         self.rl_config = configp["RL"]
@@ -66,7 +69,8 @@ class Parser(object):
     def get_env_config(self):
         env_args = {"service_area": Utils.str_to_arr(self.env_config["service_area"]),
                     "model_type": self.model_type,
-                    "m": self.n_vehicles}
+                    "m": self.n_vehicles,
+                    "hm_slice": Utils.str_to_arr(self.env_config["hm_slice"])}
         env_config = EnvConfig(**env_args)
         return env_config
 
@@ -96,7 +100,8 @@ class Parser(object):
         nn = {"nb": self.nb,
               "generalized": self.generalized,
               "preempt_action": self.preempt_action,
-              "trials": self.trials}
+              "trials": self.trials,
+              "use_obs": self.use_obs}
         for k, v in self.rl_config.items():
             if k == "lr_decay":
                 nn[k] = Utils.str_to_arr(v)
