@@ -132,7 +132,7 @@ def load_vrpscd_instances(fname):
 
 
 def generate_vrpscd_instances_generalized(instance_config, density_class_list, capacity_list, count,
-                                          max_c_size=None, max_v_size=None):
+                                          max_c_size=None, max_v_size=None, normalize=True):
     """
     Notes:
     1-since the number of realized customers is random, we define the vector of customers with a fixed size equal to
@@ -155,11 +155,12 @@ def generate_vrpscd_instances_generalized(instance_config, density_class_list, c
                [0, 1, 1, 1, 0]]
     instances = []
 
-    nbar_list = [23, 53, 83]
-    m_list = [3, 7, 11]
-    L_list = [221.47, 195.54, 187.29, 9999999]
-    n_probs = [0.1, 0.4, 0.4, 0.1]
-    n_numbers_list = [[0, 1, 2, 3], [2, 3, 4, 5], [4, 5, 6, 7]]
+    nbar_list = [23, 53, 83, 10, 15]
+    m_list = [3, 7, 11, 2, 2]
+    L_list = [221.47, 195.54, 187.29, 143.71, 201.38]
+    n_probs_list = [[0.1, 0.4, 0.4, 0.1], [0.1, 0.4, 0.4, 0.1], [0.1, 0.4, 0.4, 0.1],
+                    [1 / 2., 1 / 3., 1 / 6.], [1 / 3., 1 / 3., 1 / 3.]]
+    n_numbers_list = [[0, 1, 2, 3], [2, 3, 4, 5], [4, 5, 6, 7], [0, 1, 2], [0, 1, 2]]
     #   the distribution function for the expected demands (uniform)
     exp_demands = [5, 10, 15]
 
@@ -167,6 +168,10 @@ def generate_vrpscd_instances_generalized(instance_config, density_class_list, c
         max_c_size = int(1.2 * nbar_list[int(max(density_class_list))])
     if max_v_size is None:
         max_v_size = m_list[int(max(density_class_list))]
+
+    if normalize:
+        instance_config.depot[0] /= Utils.Norms.COORD
+        instance_config.depot[1] /= Utils.Norms.COORD
 
     for _ in range(count):
         density_class = random.choice(density_class_list)
@@ -176,21 +181,22 @@ def generate_vrpscd_instances_generalized(instance_config, density_class_list, c
         config = copy.deepcopy(instance_config)
 
         config.capacity = capacity
-        config.duration_limit = L_list[density_class] / Utils.Norms.COORD
-        config.real_duration_limit = config.duration_limit + 0.
+        config.duration_limit = L_list[density_class] + 0.
+        if normalize:
+            config.duration_limit /= Utils.Norms.DL
+
+        config.real_duration_limit = L_list[density_class] + 0.
         config.m = int(m_list[density_class] + 0.)
         nbar = int(nbar_list[density_class])
         n_numbers = n_numbers_list[density_class]
-        if config.depot[0] > 1:
-            config.depot[0] /= Utils.Norms.COORD
-            config.depot[1] /= Utils.Norms.COORD
+        n_probs = n_probs_list[density_class]
 
         #   the set of vehicles [index, l_x, l_y, q, a, occupied_node]
         v_set = np.zeros([max_v_size, 6])
         # vehicles index 0, 1, ..., m-1
+        q_coef = 1. / config.capacity if normalize else 1.
         for j in range(config.m):
-            v_set[j] = [j, config.depot[0], config.depot[0],
-                        config.capacity / Utils.Norms.Q, 0, max_c_size]
+            v_set[j] = [j, config.depot[0], config.depot[0], config.capacity * q_coef, 0, max_c_size]
 
         il = len(heatmap)
         jl = len(heatmap[0])
@@ -216,22 +222,26 @@ def generate_vrpscd_instances_generalized(instance_config, density_class_list, c
                 #   generate n_z
                 n_z = np.random.choice(n_numbers, 1, p=n_probs)[0]
                 for c in range(n_z):
-                    x_coord = random.randint(j * 20 + 1, (j + 1) * 20)
-                    y_coord = random.randint(i * 20 + 1, (i + 1) * 20)
+                    x_coord = random.randint(j * 20 + 1, (j + 1) * 20 - 1)
+                    y_coord = random.randint(i * 20 + 1, (i + 1) * 20 - 1)
 
                     #   make sure no two customers request from exactly the same location
                     while (x_coord, y_coord) in realized_pos:
-                        x_coord = random.randint(j * 20 + 1, (j + 1) * 20)
-                        y_coord = random.randint(i * 20 + 1, (i + 1) * 20)
+                        x_coord = random.randint(j * 20 + 1, (j + 1) * 20 - 1)
+                        y_coord = random.randint(i * 20 + 1, (i + 1) * 20 - 1)
                     realized_pos.append((x_coord, y_coord))
 
                     #   randomly assign an expected demand to the realized location
-                    exp_demand = random.choice(exp_demands) / Utils.Norms.Q
+                    exp_demand = random.choice(exp_demands)
+
+                    if normalize:
+                        x_coord /= Utils.Norms.COORD
+                        y_coord /= Utils.Norms.COORD
+                        exp_demand /= config.capacity
 
                     #   construct the customers raw feature set
                     # [id, l_x, l_y, h, \bar{d}, realized demand, \hat{d}, is_realized, \tilde{d}]
-                    c_set[c_count] = [c_count, x_coord / Utils.Norms.COORD, y_coord / Utils.Norms.COORD, 1,
-                                      exp_demand, -1, -1, 0, exp_demand]
+                    c_set[c_count] = [c_count, x_coord, y_coord, 1, exp_demand, -1, -1, 0, exp_demand]
                     c_count += 1
 
                     if c_count >= n_cust_limit:
