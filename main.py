@@ -38,7 +38,7 @@ if __name__ == "__main__":
                                                                 instance_config=instance_config,
                                                                 normalize=normalize_instances)
     elif parser.model_type == "VRPSCD":
-        instance_config.depot = [50, 50]
+        instance_config.depot = [.50, .50]
         env_config.service_area = [100, 100]
         if parser.operation in ["test", "test_tl", "test_min"]:
             instances = instance_generator.load_vrpscd_instances(f"{parser.density_class}_{parser.capacity[0]}")

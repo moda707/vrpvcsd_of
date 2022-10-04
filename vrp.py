@@ -267,7 +267,7 @@ class VRPSD(object):
         loc_id = int(v_k[5])
 
         if loc_id == n:
-            v_k[3] = 1.
+            v_k[3] = self.ins_config.capacity / Utils.Norms.Q
         else:
             # loc_id
             cur_cus = self.customers[loc_id]

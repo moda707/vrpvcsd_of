@@ -169,9 +169,9 @@ def generate_vrpscd_instances_generalized(instance_config, density_class_list, c
     if max_v_size is None:
         max_v_size = m_list[int(max(density_class_list))]
 
-    if normalize:
-        instance_config.depot[0] /= Utils.Norms.COORD
-        instance_config.depot[1] /= Utils.Norms.COORD
+    # if normalize:
+    #     instance_config.depot[0] /= Utils.Norms.COORD
+    #     instance_config.depot[1] /= Utils.Norms.COORD
 
     for _ in range(count):
         density_class = random.choice(density_class_list)
@@ -194,9 +194,9 @@ def generate_vrpscd_instances_generalized(instance_config, density_class_list, c
         #   the set of vehicles [index, l_x, l_y, q, a, occupied_node]
         v_set = np.zeros([max_v_size, 6])
         # vehicles index 0, 1, ..., m-1
-        q_coef = 1. / config.capacity if normalize else 1.
+        # q_coef = 1. / config.capacity if normalize else 1.
         for j in range(config.m):
-            v_set[j] = [j, config.depot[0], config.depot[0], config.capacity * q_coef, 0, max_c_size]
+            v_set[j] = [j, config.depot[0], config.depot[0], config.capacity / Utils.Norms.Q, 0, max_c_size]
 
         il = len(heatmap)
         jl = len(heatmap[0])
