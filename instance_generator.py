@@ -232,12 +232,11 @@ def generate_vrpscd_instances_generalized(instance_config, density_class_list, c
                     realized_pos.append((x_coord, y_coord))
 
                     #   randomly assign an expected demand to the realized location
-                    exp_demand = random.choice(exp_demands)
+                    exp_demand = random.choice(exp_demands) / Utils.Norms.Q
 
                     if normalize:
                         x_coord /= Utils.Norms.COORD
                         y_coord /= Utils.Norms.COORD
-                        exp_demand /= config.capacity
 
                     #   construct the customers raw feature set
                     # [id, l_x, l_y, h, \bar{d}, realized demand, \hat{d}, is_realized, \tilde{d}]

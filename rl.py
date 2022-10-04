@@ -182,6 +182,8 @@ class QLearning(object):
                     self.zero_q = 0
 
                 best_action = np.argmax(q_values)
+        # if self.env.vehicles[k][-1] == self.env.ins_config.n and best_action == self.env.ins_config.n:
+        #     print("asd")
         return best_action, best_action, state, target_customers_onehot, is_terminal
 
     def choose_action_with_obs(self, k, trials, train=True):
