@@ -1,0 +1,4 @@
+model_checkpoint_path: "3_50_9438"
+all_model_checkpoint_paths: "../3_50_9438"
+all_model_checkpoint_paths: "3_50_9438/final"
+all_model_checkpoint_paths: "3_50_9438"

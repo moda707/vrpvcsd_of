@@ -1,0 +1,4 @@
+model_checkpoint_path: "0_75_1930"
+all_model_checkpoint_paths: "../0_75_1930"
+all_model_checkpoint_paths: "0_75_1930/final"
+all_model_checkpoint_paths: "0_75_1930"

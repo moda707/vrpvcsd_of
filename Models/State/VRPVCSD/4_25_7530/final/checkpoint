@@ -1,0 +1,4 @@
+model_checkpoint_path: "4_25_7530"
+all_model_checkpoint_paths: "../4_25_7530"
+all_model_checkpoint_paths: "4_25_7530/final"
+all_model_checkpoint_paths: "4_25_7530"
