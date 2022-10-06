@@ -1,0 +1,4 @@
+model_checkpoint_path: "1_50_6403"
+all_model_checkpoint_paths: "final/1_50_6403"
+all_model_checkpoint_paths: "final/1_50_6403/final"
+all_model_checkpoint_paths: "1_50_6403"
