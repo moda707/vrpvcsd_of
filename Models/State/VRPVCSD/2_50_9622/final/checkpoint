@@ -1,0 +1,3 @@
+model_checkpoint_path: "2_50_9622"
+all_model_checkpoint_paths: "../2_50_9622"
+all_model_checkpoint_paths: "2_50_9622"
