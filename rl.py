@@ -8,10 +8,9 @@ import vrp
 
 
 class QLearning(object):
-    def __init__(self, env: vrp.VRPSD, rl_config, sess, transfer_learning=False, feat_size_c=8, feat_size_v=6):
+    def __init__(self, env: vrp.VRPSD, rl_config, sess):
         # set the environment
         self.env = env
-        # self.ins_config = self.env.ins_config
         self.env_config = self.env.env_config
 
         # rl configs
@@ -23,9 +22,6 @@ class QLearning(object):
         self.replace_target_iter = int(rl_config.replace_target_iter)
         self.batch_size = int(self.rl_config.batch_size)
         self.memory_size = int(self.rl_config.memory_size)
-        self.tl = transfer_learning
-        self.feat_size_c = feat_size_c
-        self.feat_size_v = feat_size_v
 
         self.memory = Memory(self.memory_size)
         self.replay_start = int(self.memory_size)
@@ -45,7 +41,6 @@ class QLearning(object):
         self.main_variables = None
         self.build_net()
         self.sess = sess
-        # self.sess.run(tf.global_variables_initializer())
         self.sess.run(tf.initialize_all_variables())
 
         self.saver = tf.train.Saver(var_list=self.main_variables)
@@ -59,6 +54,10 @@ class QLearning(object):
             self.choose_action = self.choose_action_without_obs
 
     def build_net(self):
+        """
+        define the state and action size for two cases, with and without obs function
+        generate the neural net
+        """
         if self.rl_config.use_obs:
             # Note that 100 = 1 / (hm_slice[0] * hm_slice[1])
             state_size = 2 * 100 + \
@@ -71,14 +70,17 @@ class QLearning(object):
         dqn_args = {"init_lr": 0.001, "state_size": state_size, "action_size": action_size}
         self.dqn = qnetwork.DQN(**dqn_args)
 
-    def get_state_observed(self, k):
-        hm_slice = self.env_config.hm_slice
-        # hm_size = int(1 / (hm_slice[0] * hm_slice[1]))
+    def get_state_observed(self, v):
+        """
+        Use the proposed observation function to return the state
+        Args:
+            v: vehicle v
+
+        """
         hm_size = 10 * 10
-        # state_size = 2 * hm_size + self.env.ins_config.m * 7 + self.nb * 8 + 6
         norms = Utils.Norms()
 
-        v_k = self.env.vehicles[k]
+        v_k = self.env.vehicles[v]
         v_loc = int(v_k[-1])
 
         ins_config = self.env.ins_config
@@ -102,11 +104,11 @@ class QLearning(object):
         # active vehicle
         dist_to_depot = self.env.distance_table[v_loc][ins_config.n]
         active_vehicles = np.zeros(ins_config.m)
-        active_vehicles[k] = 1.
+        active_vehicles[v] = 1.
 
         # target customers
         # take all feasible customers
-        avail_customers_ids, is_terminal = self.env.get_available_customers(k)
+        avail_customers_ids, is_terminal = self.env.get_available_customers(v)
         depot_is_action = False
         if ins_config.n in avail_customers_ids:
             avail_customers_ids.remove(ins_config.n)
@@ -142,26 +144,34 @@ class QLearning(object):
 
         return state_observed, target_customers_ids, target_customers_onehot, is_terminal
 
-    def get_state_real(self, k):
+    def get_state_real(self, v):
+        """
+        Args:
+            v: vehicle v
+
+        Returns: real state, raw features
+
+        """
         c_set = np.reshape(self.env.customers[:self.env.ins_config.n, [1, 2, 3, 4, 5]], [-1])
         v_set = self.env.vehicles[:, [1, 2, 3, 4]]
         v_set[:, -1] -= self.env.time
         v_set = np.reshape(v_set, [-1])
         state = np.concatenate([c_set, v_set, [self.env.ins_config.duration_limit - self.env.time]])
-        target_customers, is_terminal = self.env.get_available_customers(k)
+        target_customers, is_terminal = self.env.get_available_customers(v)
         target_customers_onehot = np.zeros(self.env.ins_config.n + 1)
         target_customers_onehot[target_customers] = 1
 
         return state, target_customers, target_customers_onehot, is_terminal
 
-    def choose_action_without_obs(self, k, trials, train=True):
+    def choose_action_without_obs(self, v, trials, train=True):
+        # epsilon greedy in training
         if train:
             epsilon = 1. - 0.9 * trials / (self.rl_config.max_trials * .3)
             epsilon = max(0.1, epsilon)
         else:
             epsilon = 0.
 
-        state, target_customers, target_customers_onehot, is_terminal = self.get_state(k)
+        state, target_customers, target_customers_onehot, is_terminal = self.get_state(v)
         n_actions = len(target_customers)
 
         if n_actions == 0:
@@ -172,21 +182,16 @@ class QLearning(object):
                 sind = math.floor(random.random() * n_actions)
                 best_action = target_customers[sind]
             else:
+                # exploit
                 q_values = self.dqn.value(state=np.expand_dims(state, axis=0), sess=self.sess)[0]
                 q_values[q_values < 0.] = 0.
                 q_values += (1 - target_customers_onehot) * (-10e9)
 
-                if np.max(q_values) <= 0.01:
-                    self.zero_q += 1
-                else:
-                    self.zero_q = 0
-
                 best_action = np.argmax(q_values)
-        # if self.env.vehicles[k][-1] == self.env.ins_config.n and best_action == self.env.ins_config.n:
-        #     print("asd")
         return best_action, best_action, state, target_customers_onehot, is_terminal
 
     def choose_action_with_obs(self, k, trials, train=True):
+        # epsilon greedy in training
         if train:
             epsilon = 1. - 0.9 * trials / (self.rl_config.max_trials * .3)
             epsilon = max(0.1, epsilon)
@@ -209,11 +214,6 @@ class QLearning(object):
                 q_values[q_values < 0.] = 0.
                 q_values += (1 - target_customers_onehot) * (-10e9)
 
-                if np.max(q_values) <= 0.01:
-                    self.zero_q += 1
-                else:
-                    self.zero_q = 0
-
                 selected_target_id = np.argmax(q_values)
                 if selected_target_id == self.nb:
                     best_action = self.env.ins_config.n
@@ -223,6 +223,7 @@ class QLearning(object):
         return best_action, selected_target_id, state, target_customers_onehot, is_terminal
 
     def learn(self, trials):
+        # replace the target network
         if trials % self.replace_target_iter == 0:
             self.sess.run(self.dqn.replace_target_op)
 
@@ -232,7 +233,6 @@ class QLearning(object):
         batch_range = range(self.batch_size)
 
         state = [val[0] for val in batch]
-        available_targets = [val[1] for val in batch]
         selected_targets = [val[2] for val in batch]
         selected_targets = np.array([[i, selected_targets[i]] for i in batch_range])
 
@@ -264,14 +264,24 @@ class QLearning(object):
                                                target_values=q_target, sess=self.sess)
         return loss, avg_gradient
 
-    def compute_actual_reward(self, k, x):
+    def compute_actual_reward(self, v, x):
+        """
+        For vehicle v and action x, compute the expected demand it may serve
+        based on its capacity and distribution functions
+        Args:
+            v: vehicle v
+            x: action x
+
+        Returns: expected serving demand
+
+        """
         n = self.env.ins_config.n
 
         if x == n:
             return 0
         else:
             selected_customer = self.env.customers[x]
-            q = self.env.vehicles[k][3]
+            q = self.env.vehicles[v][3]
 
             if self.env_config.model_type == "VRPSD":
                 kk = sum(min(q, x * selected_customer[-1]) * y
@@ -298,7 +308,7 @@ class QLearning(object):
 
         self.env.actions = {}
         reset_distance = need_reset
-        # if need_reset:
+
         if test_instance is not None:
             self.env.reset(test_instance, scenario=scenario,
                            reset_distance=reset_distance)
@@ -307,8 +317,6 @@ class QLearning(object):
         self.env.time_table = []
         for j in range(m):
             self.env.time_table.append((j, 0))
-
-        # self.env.demand_scenario = scenario
 
         # time scheduler
         agent_reward = [0] * m
@@ -326,33 +334,27 @@ class QLearning(object):
         avg_terminal_time = 0
         max_travel_time = 0
 
-        prev_time = 0
-
         while len(self.env.time_table) > 0:
             self.env.time_table.sort(key=lambda x: x[1])
-            k, time = self.env.time_table.pop(0)
+            v, time = self.env.time_table.pop(0)
             self.env.time = time
 
             # transit from s^x_{k-1} to s_k
-            served_demand = self.env.state_transition(k)
+            served_demand = self.env.state_transition(v)
 
-            prev_time = time
+            # active vehicle v takes action
+            x_k, _, _, _, is_terminal = self.choose_action(v, trials=0, train=False)
 
-            # active vehicle k takes action
-            x_k, _, _, _, is_terminal = self.choose_action(k, trials=0, train=False)
-
-            agent_reward[k] += served_demand
-            agents_record[k].append(served_demand)
-
+            # log
+            agent_reward[v] += served_demand
+            agents_record[v].append(served_demand)
             if x_k != n:
                 sum_exp_served += self.env.customers[x_k][-1]
-
-            self.env.actions[k].append(x_k)
-
+            self.env.actions[v].append(x_k)
             if x_k == n:
-                if self.env.vehicles[k][-1] != n:
+                if self.env.vehicles[v][-1] != n:
                     n_routes += 1
-                    if self.env.vehicles[k][3] > 0 and not is_terminal:
+                    if self.env.vehicles[v][3] > 0 and not is_terminal:
                         n_preemptives += 1
             else:
                 n_visits += 1
@@ -360,15 +362,14 @@ class QLearning(object):
             if is_terminal == 1:
                 avg_terminal_time += time
                 max_travel_time = time
-
-            last_actions[k] = x_k
+            last_actions[v] = x_k
 
             # transit from s_k to s^x_k
-            t_k = self.env.post_decision(x_k, k)
+            t_k = self.env.post_decision(x_k, v)
 
-            # schedule the next event for vehicle k if it still has time
+            # schedule the next event for vehicle v if it still has time
             if t_k < self.env.ins_config.duration_limit and is_terminal == 0:
-                self.env.time_table.append((k, t_k))
+                self.env.time_table.append((v, t_k))
 
             final_reward += served_demand
 
@@ -381,17 +382,18 @@ class QLearning(object):
         results.n_preemptives = n_preemptives
         if scenario is not None:
             results.tot_realized_demand = sum(scenario)
-        results.service_rate = results.final_reward / results.tot_realized_demand
+
         results.agent_record = agents_record
 
         return results
 
     def save_network(self, base_address, code, write_meta=True):
-        # saver = tf.compat.v1.train.Saver()
+        # save the trained network
         dir_name = base_address
         self.saver.save(self.sess, dir_name + "/" + code, write_meta_graph=write_meta)
 
     def load_network(self, network_address):
+        # load the trained network
         self.saver.restore(self.sess, tf.train.latest_checkpoint(network_address))
         self.sess.run(self.dqn.replace_target_op)
 

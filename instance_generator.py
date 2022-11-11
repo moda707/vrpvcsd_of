@@ -92,16 +92,19 @@ def get_coordination_from_text(s):
     return int(d[0]), [int(d[1]), int(d[2])], int(d[3])
 
 
-def load_vrpscd_instances(fname):
+def load_VRPVCSD_instances(fname):
     if "[" in fname:
         fname = fname.replace("[", "")
         fname = fname.replace("]", "")
 
-    with open("Instances/VRPSCD/" + fname, 'r') as f:
+    with open("Instances/VRPVCSD/" + fname, 'r') as f:
         s = json.load(f)
     random_instances = []
 
     for e, instance in enumerate(s):
+        # augment customers with one dummy customer representing the depot
+        instance["Customers"].append([len(instance["Customers"]), 50, 50, 0, 0, 0, 0, 0, 0])
+
         v_set = np.array(instance["Vehicles"])
         c_set = np.array(instance["Customers"])
 
@@ -131,7 +134,7 @@ def load_vrpscd_instances(fname):
     return random_instances
 
 
-def generate_vrpscd_instances_generalized(instance_config, density_class_list, capacity_list, count,
+def generate_VRPVCSD_instances_generalized(instance_config, density_class_list, capacity_list, count,
                                           max_c_size=None, max_v_size=None, normalize=True):
     """
     Notes:
@@ -293,4 +296,36 @@ class RLConfig:
         v = vars(self)
         return ', '.join("%s: %s" % item for item in v.items())
 
-
+#
+# if __name__ == "__main__":
+#
+#     with open(f"Instances/VRPVCSD/4_15_10") as file:
+#         test_customers_set = json.load(file).values()
+#         instances = []
+#         for customers in test_customers_set:
+#             instance_args = {"n": len(customers[0]),
+#                              "m": 2,
+#                              "capacity": 25,
+#                              "duration_limit": 201.38,
+#                              "real_duration_limit": 201.38,
+#                              "density_class": 4,
+#                              "stoch_type": 0,
+#                              "depot": [50., 50.]}
+#             test_vehicles = np.array([[j, 50, 50, 1., 0, len(customers[0])]
+#                                       for j in range(2)])
+#             test_customers = np.array(customers[0])
+#             # test_customers[:, [1, 2]] /= Utils.Norms.COORD
+#             # test_customers[:, [4, 8]] /= Utils.Norms.Q
+#             ins_config = InstanceConfig(**instance_args)
+#             ins_config.real_n = customers[1]
+#             ins_config.m = 2
+#             ins_config.n = len(test_customers)
+#             instance = {"Customers": test_customers.tolist(),
+#                         "Vehicles": test_vehicles.tolist(),
+#                         "Config": ins_config.__dict__,
+#                         "Name": random.randint(1000, 9999)}
+#             instances.append(instance)
+#
+#     with open(f"Instances/VRPVCSD/4_25", "w") as file:
+#         json.dump(instances, file)
+#         print("done")

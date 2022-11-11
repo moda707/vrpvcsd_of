@@ -1,6 +1,4 @@
 import argparse
-import copy
-import json
 import random
 import tensorflow as tf
 import Utils
@@ -8,7 +6,6 @@ import instance_generator
 import myparser
 import vrp
 import vrpsd_solver
-import numpy as np
 
 
 if __name__ == "__main__":
@@ -37,16 +34,16 @@ if __name__ == "__main__":
                                                                 stoch_types=parser.stoch_type,
                                                                 instance_config=instance_config,
                                                                 normalize=normalize_instances)
-    elif parser.model_type == "VRPSCD":
+    elif parser.model_type == "VRPVCSD":
         instance_config.depot = [.50, .50]
         env_config.service_area = [100, 100]
-        if parser.operation in ["test", "test_tl", "test_min"]:
-            instances = instance_generator.load_vrpscd_instances(f"{parser.density_class}_{parser.capacity[0]}")
+        if parser.operation in ["test"]:
+            instances = instance_generator.load_VRPVCSD_instances(f"{parser.density_class}_{parser.capacity[0]}")
         else:
-            instances = instance_generator.generate_vrpscd_instances_generalized(instance_config=instance_config,
-                                                                                 density_class_list=[parser.density_class],
-                                                                                 capacity_list=parser.capacity,
-                                                                                 count=100)
+            instances = instance_generator.generate_VRPVCSD_instances_generalized(instance_config=instance_config,
+                                                                                  density_class_list=[parser.density_class],
+                                                                                  capacity_list=parser.capacity,
+                                                                                  count=100)
             dls_list = set([i["Config"].duration_limit for i in instances])
 
     else:
@@ -103,7 +100,7 @@ if __name__ == "__main__":
 
                 avg_rew = learner.test(instance, visualize=False)
                 # print(avg_rew)
-                if parser.model_type == "VRPSCD":
+                if parser.model_type == "VRPVCSD":
                     print(f"{e + 1}\t{instance['Config'].real_n}\t"
                           # f"{instance['Config'].stoch_type}", 
                           f"{avg_rew}")

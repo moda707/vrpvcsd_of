@@ -2,11 +2,13 @@ import numpy as np
 import tensorflow as tf
 
 
-# DQN for the centralized formulation
+# Double Q Network
 class DQN(object):
     """
-    it receives the full state (with dummy values for missing customers)
-    and returns a qvalue for each customer
+    Input: full state or observation
+    Output: a set of q values for the action set (all customers or a subset of them)
+
+    init_lr: initial learning rate
 
     """
 
@@ -16,8 +18,7 @@ class DQN(object):
 
         self.huber_p = tf.Variable(initial_value=20., dtype=tf.float32, trainable=False)
 
-        # in placeholders, the first axis is the batch size
-        # batch x state_size (width)
+        # batch x state_size
         self.state = tf.placeholder(tf.float32, shape=[None, self.state_size], name="raw_state")
 
         # batch x 2
@@ -28,6 +29,17 @@ class DQN(object):
         self.q_target = tf.placeholder(tf.float32, [None], name='Q_target')
 
         def build_fc_q_network(state, w_init, b_init, class_name):
+            """
+            A simple neural network with two hidden layers with sizes 2/3 and 1/3 of (input_size-output_size)
+            Args:
+                state: the input state
+                w_init: weight initializer
+                b_init: bias initializer
+                class_name:
+
+            Returns: a set of q values b x action_size
+
+            """
             h1 = np.floor(2 * (self.state_size - self.action_size - 1) / 3.) + self.action_size + 1
             w1 = tf.get_variable('w_fcd_1', [self.state_size, h1], initializer=w_init,
                                  collections=class_name, dtype=tf.float32)
@@ -58,17 +70,17 @@ class DQN(object):
             # batch x 1
             selected_q = tf.gather_nd(self.q_eval, self.selected_target, name="gather_qselected")
 
-            self.td_error = self.q_target - selected_q
-            self.loss = tf.reduce_mean(tf.square(self.td_error))
-            # huber = tf.keras.losses.Huber(delta=self.huber_p)
-            # self.loss = tf.reduce_mean(huber(self.q_target, selected_q))
-            # self.loss = tf.reduce_sum(tf.math.log(tf.math.cosh(self.td_error)))
+            # MSE loss:
+            # self.td_error = self.q_target - selected_q
+            # self.loss = tf.reduce_mean(tf.square(self.td_error))
+
+            # Hubber loss:
+            huber = tf.keras.losses.Huber(delta=self.huber_p)
+            self.loss = tf.reduce_mean(huber(self.q_target, selected_q))
 
             self.optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
             var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="eval_net")
-            # self.gradient = self.optimizer.compute_gradients(self.loss, var_list=var_list)
-            # self.gradinet = [(tf.clip_by_norm(grad, 5), var) for grad, var in self.gradinet]
-            # self.opt = self.optimizer.apply_gradients(self.gradient)
+
             self.opt = self.optimizer.minimize(self.loss, var_list=var_list)
 
         # ------------------ build target_net ------------------
@@ -87,23 +99,17 @@ class DQN(object):
                      self.selected_target: selected_targets,
                      self.q_target: target_values
                      }
-        # opt, loss, gradient = sess.run([self.opt, self.loss, self.gradient], feed_dict=feed_dict)
         opt, loss = sess.run([self.opt, self.loss], feed_dict=feed_dict)
-        # avg_gradient = np.mean([abs(item) for g in gradient for item in g[0].reshape(-1)])
         return loss, 0
 
     def value(self, state, sess):
         feed_dict = {self.state: state}
         values = sess.run(self.q_eval, feed_dict=feed_dict)
-        # values, mm, ss = sess.run([self.q_eval, self.embeddings, self.state], feed_dict=feed_dict)
-
-        # batch x n_target_customers
         return values
 
     def value_(self, state, sess):
         feed_dict = {self.state: state}
         values = sess.run(self.q_next, feed_dict=feed_dict)
-
         return values
 
     def set_opt_param(self, sess, new_lr=None, new_hp=None):
@@ -115,8 +121,4 @@ class DQN(object):
     def get_learning_params(self, sess):
         # learning rate and huber param
         return sess.run([self.lr, self.huber_p])
-
-    @staticmethod
-    def expand_dim(a):
-        return np.expand_dims(a, axis=0)
 

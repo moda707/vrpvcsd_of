@@ -11,8 +11,6 @@ class VRPSD(object):
         self.vehicles = None
         self.customers = None
         self.model_type = env_config.model_type
-        # self.c_enc = None
-        # self.v_enc = None
 
         self.time = 0
         self.env_config = env_config
@@ -37,59 +35,6 @@ class VRPSD(object):
             self.demand_realization = self.demand_realization_solomon
         else:
             self.demand_realization = self.demand_realization_gendreau
-
-    def init_encoded_env(self):
-        norm = Utils.Norms()
-        n = self.ins_config.n
-
-        #   features set for customers
-        # is_realized: if the actual demand is realized, \tild{d}=\bar{d} if \hat{d}=-1 else \hat{d},
-        # is_customer: indicates that the node is a customer and not a depot,
-        # is_target: whether it is in the set of target customers or not
-        # l_x, l_y, is_realized, \tild{d}, is_customer, is_target
-        # c_set = self.customers[:, [1, 2, 7, 8, 8, 8]]
-        # c_set[:, -2:] = [1., 0.]
-
-        # l_x, l_y, h, bar{d}, hat{d}
-        c_set = self.customers[:, [1, 2, 3, 4, 5]]
-        # c_set[c_set[:, 0] > 0.0001, -2:] = [1., 0.]
-
-        # add a node as the depot
-        # depot = np.array([self.ins_config.depot[0], self.ins_config.depot[1],
-        #                   1., 0., -1, 0])
-        depot = np.array([self.ins_config.depot[0], self.ins_config.depot[1],
-                          1., 0., 0])
-
-        # add a dummy node at the end
-        # dummy = np.zeros(6)
-        dummy = np.zeros(5)
-
-        c_set = np.vstack([c_set, depot, dummy])
-
-        #   features set fo vehicles
-        #   d_exp: expected demand to serve at its destination, loc_depot: whether it is located at the depot
-        # For v: x, y, q, a, d_exp, loc_depot
-        v_set = []
-        for v in self.vehicles:
-            exp_dem = 0
-            loc_depot = 1
-            l = int(v[-1])
-            if l != n:
-                exp_dem = self.customers[l, -1]
-                loc_depot = 0
-            v_set.append([v[1], v[2], v[3], v[4] - self.time, exp_dem, loc_depot])
-
-        v_set = np.array(v_set)
-
-        #   instance characteristics - used in the generalized DecDQN
-        instance_chars = [self.ins_config.duration_limit, self.ins_config.capacity / norm.Q, self.ins_config.m,
-                          0, 0, 0]
-        if self.model_type == "VRPSD":
-            instance_chars[-3 + self.ins_config.stoch_type] = 1.
-        else:
-            instance_chars[-3 + self.ins_config.density_class] = 1.
-
-        return c_set, v_set, instance_chars
 
     def initialize_environment(self, instance):
         self.customers = np.array(instance["Customers"])

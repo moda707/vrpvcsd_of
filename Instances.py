@@ -106,12 +106,12 @@ def get_coordination_from_text(s):
     return int(d[0]), [int(d[1]), int(d[2])], int(d[3])
 
 
-def load_vrpscd_instances(fname):
+def load_VRPVCSD_instances(fname):
     if "[" in fname:
         fname = fname.replace("[", "")
         fname = fname.replace("]", "")
 
-    with open("Instances/VRPSCD/" + fname, 'r') as f:
+    with open("Instances/VRPVCSD/" + fname, 'r') as f:
         s = json.load(f)
     random_instances = []
 
@@ -126,7 +126,7 @@ def load_vrpscd_instances(fname):
     return random_instances
 
 
-def generate_vrpscd_instances(config, density_class, capacity, duration_limit, n_vehicles, count):
+def generate_VRPVCSD_instances(config, density_class, capacity, duration_limit, n_vehicles, count):
     """
     Notes:
     1-since the number of realized customers is random, we define the vector of customers with a fixed size equal to
@@ -241,7 +241,7 @@ def generate_vrpscd_instances(config, density_class, capacity, duration_limit, n
     return instances, code
 
 
-def generate_vrpscd_instances_generalized(config, density_class_list, capacity_list, count,
+def generate_VRPVCSD_instances_generalized(config, density_class_list, capacity_list, count,
                                           max_c_size=None, max_v_size=None):
     """
     Notes:

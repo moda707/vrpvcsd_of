@@ -8,14 +8,17 @@ class Parser(object):
         configp = configparser.ConfigParser()
         configp.read("config.ini")
 
-        parser.add_argument('--model', nargs="+", help="'VRPSCD' or 'VRPSD'?", type=str, metavar="model_type")
-        parser.add_argument('--operation', nargs="+", help="train or test?", type=str, metavar="operation")
+        parser.add_argument('--model', nargs="?", help="'VRPVCSD' or 'VRPSD'?", type=str, metavar="model_type",
+                            default=["VRPVCSD"])
+        parser.add_argument('--operation', nargs="+", help="'train' or 'test'?", type=str, metavar="operation")
 
         parser.add_argument('--c', nargs="+", help="number of customers", type=int, metavar="n_customers")
         parser.add_argument('--v', nargs="+", help="number of vehicles", type=int, metavar="n_vehicles")
         parser.add_argument('--q', nargs="+", help="capacity of vehicle", type=int, metavar="capacity")
-        parser.add_argument('--dl', nargs="+", help="duration limit of vehicle", type=float, metavar="dl")
-        parser.add_argument('--sv', nargs="+", help="stochastic variablity", type=int, metavar="stoch_type")
+        parser.add_argument('--dl', nargs="?", help="duration limit of vehicle", type=float, metavar="dl",
+                            default=[0])
+        parser.add_argument('--sv', nargs="?", help="stochastic variablity", type=int, metavar="stoch_type",
+                            default=[0])
         parser.add_argument('--trials', nargs="?", help="number of trials to train", type=int, metavar="trials",
                             default=100000)
 
@@ -28,16 +31,12 @@ class Parser(object):
         parser.add_argument('--instance_count', nargs="?", help="number of instances", type=int,
                             metavar="instance_count")
         parser.add_argument('--nb', nargs="?", help="neighbor customers", type=int, metavar="nb", default=15)
-        parser.add_argument('--start_train', nargs="?", help="start train trial", type=int, metavar="start_train",
-                            default=0)
+
         parser.add_argument('--code', nargs="?", help="code", type=str, metavar="code",
                             default="")
-        parser.add_argument('--generalized', nargs="?", help="is generalized", type=int, metavar="generalized",
-                            default=0)
+
         parser.add_argument('--obs', nargs="?", help="use obs (1 or 0)", type=int, metavar="use_obs",
                             default=1)
-        parser.add_argument('--preempt_action', nargs="?", help="use the preemptive actions (1 or 0)?", type=int,
-                            metavar="preempt_action", default=1)
 
         args = parser.parse_args()
 
@@ -58,9 +57,6 @@ class Parser(object):
         self.base_address = args.base_address
         self.nb = args.nb
         self.instance_count = args.instance_count
-        self.start_train_trial = args.start_train
-        self.generalized = args.generalized
-        self.preempt_action = args.preempt_action
         self.use_obs = args.obs
 
         self.env_config = configp["Environment"]
@@ -92,14 +88,11 @@ class Parser(object):
                           "code": self.code,
                           "base_address": self.base_address,
                           "nb": self.nb,
-                          "instance_count": self.instance_count,
-                          "start_train_trial": self.start_train_trial}
+                          "instance_count": self.instance_count}
         return GenConfig(**general_config)
 
     def get_rl_config(self):
         nn = {"nb": self.nb,
-              "generalized": self.generalized,
-              "preempt_action": self.preempt_action,
               "trials": self.trials,
               "use_obs": self.use_obs}
         for k, v in self.rl_config.items():

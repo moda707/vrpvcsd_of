@@ -9,4 +9,4 @@
 #SBATCH --output=reports/Obs/%x
 module load python/3.6
 source ~/modaenv/bin/activate
-python -u main.py --density 0 --q 25 --obs 0 --dl 240.45 --model VRPSCD --operation train_min --trials 3000000 --preempt_action 1 --base_address Models/Obs/VRPSCD/
+python -u main.py --density 0 --q 25 --obs 0 --dl 240.45 --model VRPVCSD --operation train_min --trials 3000000 --preempt_action 1 --base_address Models/Obs/VRPVCSD/
