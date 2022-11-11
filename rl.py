@@ -18,7 +18,6 @@ class QLearning(object):
         self.lr = float(rl_config.lr)
         self.test_every = int(rl_config.test_every)
         self.ep_max = int(rl_config.ep_max)
-        self.update_freq = int(rl_config.update_freq)
         self.replace_target_iter = int(rl_config.replace_target_iter)
         self.batch_size = int(self.rl_config.batch_size)
         self.memory_size = int(self.rl_config.memory_size)

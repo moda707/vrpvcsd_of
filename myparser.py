@@ -88,7 +88,8 @@ class Parser(object):
                           "code": self.code,
                           "base_address": self.base_address,
                           "nb": self.nb,
-                          "instance_count": self.instance_count}
+                          "instance_count": self.instance_count,
+                          "report_every": int(self.rl_config["report_every"])}
         return GenConfig(**general_config)
 
     def get_rl_config(self):

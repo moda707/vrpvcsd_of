@@ -59,7 +59,7 @@ class Learner:
 
         fr_list = []
         learning_loss = [0]
-        n_period_result = 1000
+        n_period_result = self.gen_config.report_every
 
         counter = 0
         self.model.stop = False
@@ -223,7 +223,7 @@ class Learner:
             if self.trials % n_period_result == 0:
                 avg_final_reward = np.mean(fr_list)
                 print(f"{self.trials}\t{update_counter}\t{avg_final_reward:.2f}\t{self.model.TrainTime:.1f}\t"
-                      f"{np.mean(learning_loss):.6f}\t{np.mean(gradient_record):.6f}\t{self.model.zero_q}")
+                      f"{np.mean(learning_loss):.6f}")
                 fr_list = []
                 self.model.zero_q = 0
 
